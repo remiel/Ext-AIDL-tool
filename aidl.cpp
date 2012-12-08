@@ -1,3 +1,19 @@
+/*
+ *   Copyright 2012 Remiel.C.Lee
+ *
+ *   This program is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
 
 #include "aidl_language.h"
 #include "options.h"
@@ -93,7 +109,7 @@ struct import_info {
 };
 
 document_item_type* g_document = NULL;
-import_info* g_imports = NULL;
+static map<string, import_info*> import_info_map;
 
 static void
 main_document_parsed(document_item_type* d)
@@ -110,9 +126,9 @@ main_import_parsed(buffer_type* statement)
     import->statement.lineno = statement->lineno;
     import->statement.data = strdup(statement->data);
     import->statement.extra = NULL;
-    import->next = g_imports;
+    import->next = import_info_map[g_currentFilename];
     import->neededClass = parse_import_statement(statement->data);
-    g_imports = import;
+    import_info_map[g_currentFilename] = import;
 }
 
 static ParserCallbacks g_mainCallbacks = {
@@ -539,45 +555,6 @@ next:
     return err;
 }
 
-static int
-check_types(const char* filename, document_item_type* items)
-{
-    int err = 0;
-    while (items) {
-        // (nothing to check for USER_DATA_TYPE)
-        if (items->item_type == INTERFACE_TYPE_BINDER
-                || items->item_type == INTERFACE_TYPE_RPC) {
-            map<string,method_type*> methodNames;
-            interface_type* c = (interface_type*)items;
-
-            interface_item_type* member = c->interface_items;
-            while (member) {
-                if (member->item_type == METHOD_TYPE) {
-                    method_type* m = (method_type*)member;
-
-                    err |= check_method(filename, items->item_type, m);
-
-                    // prevent duplicate methods
-                    if (methodNames.find(m->name.data) == methodNames.end()) {
-                        methodNames[m->name.data] = m;
-                    } else {
-                        fprintf(stderr,"%s:%d attempt to redefine method %s,\n",
-                                filename, m->name.lineno, m->name.data);
-                        method_type* old = methodNames[m->name.data];
-                        fprintf(stderr, "%s:%d    previously defined here.\n",
-                                filename, old->name.lineno);
-                        err = 1;
-                    }
-                }
-                member = member->next;
-            }
-        }
-
-        items = items->next;
-    }
-    return err;
-}
-
 // ==========================================================
 static int
 exactly_one_interface(const char* filename, const document_item_type* items, const Options& options,
@@ -644,8 +621,7 @@ generate_dep_file(const Options& options, const document_item_type* items)
     }
 
     const char* slash = "\\";
-    import_info* import = g_imports;
-    if (import == NULL) {
+    if (import_info_map.empty()) {
         slash = "";
     }
 
@@ -657,14 +633,20 @@ generate_dep_file(const Options& options, const document_item_type* items)
     }
     fprintf(to, "  %s %s\n", options.inputFileName.c_str(), slash);
 
-    while (import) {
-        if (import->next == NULL) {
-            slash = "";
+    map<string, import_info*>::iterator it;
+    for (it = import_info_map.begin();it != import_info_map.end();) {
+        import_info* import = (*it).second;
+        ++it;
+        bool isFinal = (it == import_info_map.end());
+        while (import) {
+            if (isFinal && import->next == NULL) {
+                slash = "";
+            }
+            if (import->filename) {
+                fprintf(to, "  %s %s\n", import->filename, slash);
+            }
+            import = import->next;
         }
-        if (import->filename) {
-            fprintf(to, "  %s %s\n", import->filename, slash);
-        }
-        import = import->next;
     }
 
     fprintf(to, "\n");
@@ -848,12 +830,213 @@ parse_preprocessed_file(const string& filename)
     fclose(f);
     return 0;
 }
+// ==========================================================
+static map<string, document_item_type*> file_import_map;
+static map<string, document_item_type*> name_import_map;
+
+static int
+parse_imports()
+{
+    int err = 0;
+    g_callbacks = &g_mainCallbacks;
+    bool new_import = 1;
+    while (new_import) {
+        new_import = 0;
+        map<string, import_info*>::iterator it;
+        for (it = import_info_map.begin();it != import_info_map.end();++it) {
+            import_info* import = (*it).second;
+            while (import) {
+                if (NAMES.Find(import->neededClass) == NULL && import->filename == NULL) {
+                    import->filename = find_import_file(import->neededClass);
+                    if (!import->filename) {
+                        fprintf(stderr, "%s:%d: couldn't find import for class %s\n",
+                                import->from, import->statement.lineno,
+                                import->neededClass);
+                        err |= 1;
+                    } else {
+                        // DO NOT parse parsed class again
+                        if (file_import_map.find(import->filename) == file_import_map.end()) {
+                            err |= parse_aidl(import->filename);
+                            import->doc = g_document;
+                            if (import->doc == NULL) {
+                                err |= 1;
+                            } else {
+                                file_import_map[import->filename] = import->doc;
+                                char *name = strrchr(import->neededClass, '.');
+                                if (name)
+                                    name_import_map[name + 1] = import->doc;
+                                else
+                                    name_import_map[import->neededClass] = import->doc;
+                                new_import = 1;
+                            }
+                        }
+                    }
+                }
+                import = import->next;
+            }
+        }
+    }
+    
+#if 0
+    map<string, import_info*>::iterator it;
+    for (it = import_info_map.begin();it != import_info_map.end();++it) {
+        import_info* import = (*it).second;
+        while (import) {
+            printf("parse_imports filename = %s\n", import->filename);
+            import = import->next;
+        }
+    }
+#endif
+    return err;
+}
+
+// ==========================================================
+static map<string, method_type*> origin_method_names;
+static map<string, method_type*> ext_method_names;
+static vector<const char*> interface_stack;
+static int
+gather_method_from_parent(const char* origin_filename, const char *child, ext_interface_type *ext)
+{
+    Type* type = NAMES.Search(ext->name.data);
+    map<string, document_item_type*>::iterator it = file_import_map.find(type->DeclFile());
+    if (it != name_import_map.end()) {
+        document_item_type* items = (*it).second;
+        int err = 0;
+        while (items) {
+            // (nothing to check for USER_DATA_TYPE)
+            if (items->item_type == INTERFACE_TYPE_BINDER
+                    || items->item_type == INTERFACE_TYPE_RPC) {
+                interface_type* c = (interface_type*)items;
+                int N = interface_stack.size();
+                for (int i = 0;i < N;++i) {
+#if 0
+    printf("stack = %s\n", interface_stack[i]);
+#endif
+                    if (!strcmp(c->name.data, interface_stack[i])) {
+                        // check circular reference
+                        fprintf(stderr, "There exsits a circular reference! Please see \"%s\" and \"%s\"\n", child, ext->name.data);
+                        return 1;
+                    }
+                }
+                interface_stack.push_back(c->name.data);
+                if (strcmp(c->name.data, ext->name.data)) {
+                    items = items->next;
+                    continue;
+                }
+
+                interface_item_type* member = c->interface_items;
+                while (member) {
+                    if (member->item_type == METHOD_TYPE) {
+                        method_type* m = (method_type*)member;
+
+                        err |= check_method(type->DeclFile().c_str(), items->item_type, m);
+                        if (err) return err;
+
+                        // prevent duplicate methods
+                        bool origin = (origin_method_names.find(m->name.data) == origin_method_names.end());
+                        bool ext = (ext_method_names.find(m->name.data) == ext_method_names.end());
+                        if (origin && ext) {
+                            ext_method_names[m->name.data] = m;
+                        } else {
+                            if (!origin) {
+                                method_type* origin_method = origin_method_names[m->name.data];
+                                fprintf(stderr,"%s:%d    attempt to redefine method %s,\n",
+                                    origin_filename, origin_method->name.lineno, origin_method->name.data);
+                                fprintf(stderr, "%s:%d    previously defined here.\n",
+                                    type->DeclFile().c_str(), m->name.lineno);
+                            }
+                            if (!ext) {
+                                fprintf(stderr, "%s:%d    method %s has been duplicate defined in the ext interface. Please check!\n",
+                                    type->DeclFile().c_str(), m->name.lineno, m->name.data);
+                            }
+                            err = 1;
+                        }
+                    }
+                    member = member->next;
+                }
+                ext_interface_type *ext_interface = c->ext_interfaces;
+                while (ext_interface) {
+                    err |= gather_method_from_parent(origin_filename, c->name.data, ext_interface);
+                    if (err) return err;
+                    ext_interface = ext_interface->next;
+                }
+                interface_stack.pop_back();
+            }
+            items = items->next;
+        }
+    } else {
+        fprintf(stderr, "Can't find the data about: %s\n", type->DeclFile().c_str());
+        return 1;
+    }
+    return 0;
+}
+
+static int
+gather_method(const char* filename, document_item_type* items)
+{
+    int err = 0;
+    while (items) {
+        // (nothing to check for USER_DATA_TYPE)
+        if (items->item_type == INTERFACE_TYPE_BINDER
+                || items->item_type == INTERFACE_TYPE_RPC) {
+            interface_type* c = (interface_type*)items;
+            interface_stack.push_back(c->name.data);
+
+            interface_item_type* member = c->interface_items;
+            while (member) {
+                if (member->item_type == METHOD_TYPE) {
+                    method_type* m = (method_type*)member;
+
+                    err |= check_method(filename, items->item_type, m);
+                    if (err) return err;
+
+                    // prevent duplicate methods
+                    if (origin_method_names.find(m->name.data) == origin_method_names.end()) {
+                        origin_method_names[m->name.data] = m;
+                    } else {
+                        fprintf(stderr,"%s:%d    attempt to redefine method %s,\n",
+                            filename, m->name.lineno, m->name.data);
+                        method_type* old = origin_method_names[m->name.data];
+                        fprintf(stderr, "%s:%d    previously defined here.\n",
+                            filename, old->name.lineno);
+                        err = 1;
+                    }
+                }
+                member = member->next;
+            }
+            ext_interface_type *ext_interface = c->ext_interfaces;
+            while (ext_interface) {
+                err |= gather_method_from_parent(filename, c->name.data, ext_interface);
+                if (err) return err;
+                ext_interface = ext_interface->next;
+            }
+            interface_stack.pop_back();
+        }
+        items = items->next;
+    }
+#if 0
+    printf("Check origin method now: \n");
+    map<string, method_type*>::iterator check_iterator;
+    for (check_iterator = origin_method_names.begin();check_iterator != origin_method_names.end();++check_iterator) {
+        printf("method: %s\n", (*check_iterator).first.c_str());
+    }
+    printf("end\n");
+    printf("Check extend method now: \n");
+    for (check_iterator = ext_method_names.begin();check_iterator != ext_method_names.end();++check_iterator) {
+        printf("+method: %s\n", (*check_iterator).first.c_str());
+    }
+    printf("end\n");
+#endif
+    return 0;
+}
 
 // ==========================================================
 static int
 compile_aidl(Options& options)
 {
     int err = 0, N;
+    map<string, document_item_type*>::iterator import_iterator;
+    document_item_type* import_doc;
 
     set_import_paths(options.importPaths);
 
@@ -876,26 +1059,9 @@ compile_aidl(Options& options)
     g_document = NULL;
 
     // parse the imports
-    g_callbacks = &g_mainCallbacks;
-    import_info* import = g_imports;
-    while (import) {
-        if (NAMES.Find(import->neededClass) == NULL) {
-            import->filename = find_import_file(import->neededClass);
-            if (!import->filename) {
-                fprintf(stderr, "%s:%d: couldn't find import for class %s\n",
-                        import->from, import->statement.lineno,
-                        import->neededClass);
-                err |= 1;
-            } else {
-                err |= parse_aidl(import->filename);
-                import->doc = g_document;
-                if (import->doc == NULL) {
-                    err |= 1;
-                }
-            }
-        }
-        import = import->next;
-    }
+    err |= parse_imports();
+    // from now on, use file_import_map instead of import_info_map
+
     // bail out now if parsing wasn't successful
     if (err != 0 || mainDoc == NULL) {
         //fprintf(stderr, "aidl: parsing failed, stopping.\n");
@@ -904,35 +1070,44 @@ compile_aidl(Options& options)
 
     // complain about ones that aren't in the right files
     err |= check_filenames(options.inputFileName.c_str(), mainDoc);
-    import = g_imports;
-    while (import) {
-        err |= check_filenames(import->filename, import->doc);
-        import = import->next;
+    for (import_iterator = file_import_map.begin();import_iterator != file_import_map.end();++import_iterator) {
+        const char *import_filename = (*import_iterator).first.c_str();
+        import_doc = (*import_iterator).second;
+        err |= check_filenames(import_filename, import_doc);
     }
 
     // gather the types that have been declared
     err |= gather_types(options.inputFileName.c_str(), mainDoc);
-    import = g_imports;
-    while (import) {
-        err |= gather_types(import->filename, import->doc);
-        import = import->next;
+    
+    for (import_iterator = file_import_map.begin();import_iterator != file_import_map.end();++import_iterator) {
+        const char *import_filename = (*import_iterator).first.c_str();
+        import_doc = (*import_iterator).second;
+        err |= gather_types(import_filename, import_doc);
     }
 
 #if 0
     printf("---- main doc ----\n");
     test_document(mainDoc);
 
-    import = g_imports;
-    while (import) {
+    for (import_iterator = file_import_map.begin();import_iterator != file_import_map.end();++import_iterator) {
+        import_doc = (*import_iterator).second;
         printf("---- import doc ----\n");
-        test_document(import->doc);
-        import = import->next;
+        test_document(import_doc);
     }
     NAMES.Dump();
 #endif
 
     // check the referenced types in mainDoc to make sure we've imported them
-    err |= check_types(options.inputFileName.c_str(), mainDoc);
+    const char *inputFileName = options.inputFileName.c_str();
+    err |= gather_method(inputFileName, mainDoc);
+    /*
+    err |= check_types(inputFileName, inputFileName, mainDoc);
+    for (import_iterator = file_import_map.begin();import_iterator != file_import_map.end();++import_iterator) {
+        const char *import_filename = (*import_iterator).first.c_str();
+        import_doc = (*import_iterator).second;
+        err |= check_types(inputFileName, import_filename, import_doc);
+    }
+    */
 
     // finally, there really only needs to be one thing in mainDoc, and it
     // needs to be an interface.
@@ -968,8 +1143,9 @@ compile_aidl(Options& options)
     // make sure the folders of the output file all exists
     check_outputFilePath(options.outputFileName);
 
+    map<string, method_type*> method_names[2] = {origin_method_names, ext_method_names};
     err = generate_java(options.outputFileName, options.inputFileName.c_str(),
-                        (interface_type*)mainDoc);
+                        (interface_type*)mainDoc, method_names);
 
     return err;
 }

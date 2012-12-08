@@ -1,3 +1,20 @@
+/*
+ *   Copyright 2012 Remiel.C.Lee
+ *
+ *   This program is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 %{
 #include "aidl_language.h"
 #include <stdio.h>
@@ -19,6 +36,7 @@ static int count_brackets(const char*);
 %token ARRAY
 %token PARCELABLE
 %token INTERFACE
+%token EXTENDS
 %token FLATTENABLE
 %token RPC
 %token IN
@@ -162,14 +180,49 @@ interface_keywords:
     |   RPC
     ;
 
+extend_interfaces:
+        IDENTIFIER                                  {
+                                                        ext_interface_type *p = (ext_interface_type *)malloc(sizeof(ext_interface_type));
+                                                        p->name = $1.buffer;
+                                                        p->next = NULL;
+                                                        $$.ext_interface_obj = p;
+                                                    }
+    |   extend_interfaces ',' IDENTIFIER            {
+                                                        if ($$.ext_interface_obj != NULL) {
+                                                            // only NULL on error
+                                                            $$ = $1;
+                                                            ext_interface_type *p = $1.ext_interface_obj;
+                                                            while (p && p->next) {
+                                                                p=p->next;
+                                                            }
+                                                            p->comma_token = $2.buffer;
+                                                            ext_interface_type *np = (ext_interface_type *)malloc(sizeof(ext_interface_type));
+                                                            np->name = $3.buffer;
+                                                            np->next = NULL;
+                                                            p->next = np;
+                                                        }
+                                                    }
+    ;
+
 interface_decl:
         interface_header IDENTIFIER '{' interface_items '}' { 
                                                         interface_type* c = $1.interface_obj;
                                                         c->name = $2.buffer;
                                                         c->package = g_currentPackage ? strdup(g_currentPackage) : NULL;
+                                                        c->ext_interfaces = NULL;
                                                         c->open_brace_token = $3.buffer;
                                                         c->interface_items = $4.interface_item;
                                                         c->close_brace_token = $5.buffer;
+                                                        $$.interface_obj = c;
+                                                    }
+    |   interface_header IDENTIFIER EXTENDS extend_interfaces '{' interface_items '}' { 
+                                                        interface_type* c = $1.interface_obj;
+                                                        c->name = $2.buffer;
+                                                        c->package = g_currentPackage ? strdup(g_currentPackage) : NULL;
+                                                        c->ext_interfaces = $4.ext_interface_obj;
+                                                        c->open_brace_token = $5.buffer;
+                                                        c->interface_items = $6.interface_item;
+                                                        c->close_brace_token = $7.buffer;
                                                         $$.interface_obj = c;
                                                     }
     |   interface_keywords error '{' interface_items '}'     {

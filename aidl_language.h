@@ -1,3 +1,20 @@
+/*
+ *   Copyright 2012 Remiel.C.Lee
+ *
+ *   This program is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef DEVICE_TOOLS_AIDL_AIDL_LANGUAGE_H
 #define DEVICE_TOOLS_AIDL_AIDL_LANGUAGE_H
 
@@ -89,6 +106,12 @@ typedef struct user_data_type {
     int flattening_methods;
 } user_data_type;
 
+typedef struct ext_interface_type {
+    buffer_type name;
+    buffer_type comma_token; // empty in the first one in the list
+    struct ext_interface_type* next;
+} ext_interface_type;
+
 typedef struct interface_type {
     document_item_type document_item;
     buffer_type interface_token;
@@ -96,6 +119,7 @@ typedef struct interface_type {
     buffer_type oneway_token;
     char* package;
     buffer_type name;
+    ext_interface_type* ext_interfaces;
     buffer_type open_brace_token;
     interface_item_type* interface_items;
     buffer_type close_brace_token;
@@ -108,6 +132,7 @@ typedef union lexer_type {
     arg_type *arg;
     method_type* method;
     interface_item_type* interface_item;
+    ext_interface_type* ext_interface_obj;
     interface_type* interface_obj;
     user_data_type* user_data;
     document_item_type* document_item;

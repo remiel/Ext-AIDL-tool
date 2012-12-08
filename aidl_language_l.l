@@ -1,3 +1,20 @@
+/*
+ *   Copyright 2012 Remiel.C.Lee
+ *
+ *   This program is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 %{
 #include "aidl_language.h"
 #include "aidl_language_y.h"
@@ -81,6 +98,7 @@ brackets    \[{whitespace}?\]
     /* keywords */
 parcelable      { SET_BUFFER(PARCELABLE); return PARCELABLE; }
 interface       { SET_BUFFER(INTERFACE); return INTERFACE; }
+extends         { SET_BUFFER(EXTENDS); return EXTENDS; }
 flattenable     { SET_BUFFER(FLATTENABLE); return FLATTENABLE; }
 rpc             { SET_BUFFER(INTERFACE); return RPC; }
 in              { SET_BUFFER(IN); return IN; }

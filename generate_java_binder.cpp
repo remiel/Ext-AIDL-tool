@@ -1,3 +1,20 @@
+/*
+ *   Copyright 2012 Remiel.C.Lee
+ *
+ *   This program is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "generate_java.h"
 #include "Type.h"
 #include <string.h>
@@ -248,7 +265,7 @@ generate_read_from_parcel(Type* t, StatementBlock* addTo, Variable* v,
 
 static void
 generate_method(const method_type* method, Class* interface,
-                    StubClass* stubClass, ProxyClass* proxyClass, int index)
+                    StubClass* stubClass, ProxyClass* proxyClass, int index, bool extend_method)
 {
     arg_type* arg;
     int i;
@@ -286,7 +303,8 @@ generate_method(const method_type* method, Class* interface,
 
     decl->exceptions.push_back(REMOTE_EXCEPTION_TYPE);
 
-    interface->elements.push_back(decl);
+    if (!extend_method)
+        interface->elements.push_back(decl);
 
     // == the stub method ====================================================
 
@@ -514,7 +532,7 @@ generate_interface_descriptors(StubClass* stub, ProxyClass* proxy)
 }
 
 Class*
-generate_binder_interface_class(const interface_type* iface)
+generate_binder_interface_class(const interface_type* iface, map<string, method_type*>* method_map)
 {
     InterfaceType* interfaceType = static_cast<InterfaceType*>(
         NAMES.Find(iface->package, iface->name.data));
@@ -526,6 +544,15 @@ generate_binder_interface_class(const interface_type* iface)
         interface->what = Class::INTERFACE;
         interface->type = interfaceType;
         interface->interfaces.push_back(IINTERFACE_TYPE);
+        {
+            ext_interface_type* p = iface->ext_interfaces;
+            while (p) {
+                Type* t = NAMES.Search(p->name.data);
+                if (t != NULL)
+                    interface->interfaces.push_back(t);
+                p = p->next;
+            }
+        }
 
     // the stub inner class
     StubClass* stub = new StubClass(
@@ -545,15 +572,20 @@ generate_binder_interface_class(const interface_type* iface)
 
     // all the declared methods of the interface
     int index = 0;
-    interface_item_type* item = iface->interface_items;
-    while (item != NULL) {
-        if (item->item_type == METHOD_TYPE) {
-            generate_method((method_type*)item, interface, stub, proxy, index);
-        }
-        item = item->next;
+    map<string, method_type*>::iterator it;
+    // origin method
+    for (it = method_map[0].begin();it != method_map[0].end();++it) {
+        method_type* item = (*it).second;
+        generate_method(item, interface, stub, proxy, index, false);
         index++;
     }
-
+    
+    // extend method
+    for (it = method_map[1].begin();it != method_map[1].end();++it) {
+        method_type* item = (*it).second;
+        generate_method(item, interface, stub, proxy, index, true);
+        index++;
+    }
     return interface;
 }
 
